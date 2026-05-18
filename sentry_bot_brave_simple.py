@@ -78,6 +78,7 @@ load_dotenv(Path(__file__).parent / ".env")
 THRESHOLD_GREEN       = 0.95
 THRESHOLD_YELLOW      = 0.50
 BASELINE_REFRESH_DAYS = 7
+FETCH_TIMEOUT_SEC     = 40   # hard cap per URL across all browser operations
 
 # ── Hack-indicator keywords (body text scan) ──────────────────────────────────
 # Common patterns injected by pharma hacks, SEO spam, and defacement scripts.
@@ -327,8 +328,14 @@ def brave_search(domain: str, api_key: str, count: int = 10) -> list[dict]:
 
 async def fetch_meta(page, url: str) -> dict:
     try:
-        resp = await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+        resp = await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
         status = resp.status if resp else 0
+
+        # Let JS redirects settle without waiting for all heavy resources
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5_000)
+        except Exception:
+            pass
 
         title = (await page.title() or "").strip()
 
@@ -528,7 +535,17 @@ async def run(domain: str, api_key: str, count: int, headless: bool,
         for i, hit in enumerate(hits, 1):
             url = hit["url"]
             print(f"         [{i:>2}/{len(hits)}]  {url}")
-            meta = await fetch_meta(page, url)
+            try:
+                meta = await asyncio.wait_for(fetch_meta(page, url), timeout=FETCH_TIMEOUT_SEC)
+            except asyncio.TimeoutError:
+                print(f"                    Timed out after {FETCH_TIMEOUT_SEC}s — resetting browser page")
+                meta = {"status": 0, "title": "", "description": "",
+                        "content_text": "", "keywords_found": [],
+                        "note": f"Audit timed out after {FETCH_TIMEOUT_SEC}s"}
+                try:
+                    await page.goto("about:blank", wait_until="domcontentloaded", timeout=5_000)
+                except Exception:
+                    pass
             await page.wait_for_timeout(700)
 
             ts  = similarity(hit["title"],       meta["title"])

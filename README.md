@@ -233,24 +233,48 @@ To get a domain indexed by Brave Search, visit [search.brave.com](https://search
 
 ## Deploying on Linux VPS (Ubuntu)
 
-### 1. Install system dependencies
+### Automated setup (recommended)
+
+After cloning the repo, run the setup script once. It handles everything:
 
 ```bash
-sudo apt update
-sudo apt install -y python3 python3-pip python3-venv
+git clone <your-repo-url> /opt/df-sentrybot
+cd /opt/df-sentrybot
+bash setup.sh
 ```
 
-Then follow the [Installation](#installation) steps above.
+The script will:
+1. Install Python and system packages if missing
+2. Create a `.venv` virtual environment and install all dependencies
+3. Install Playwright's Chromium browser and its system libraries
+4. Create `.env` from `.env.example` and prompt for your Teams webhook URL
+5. Create the `logs/` directory and configure `logrotate` (30-day retention)
+6. Add the hourly cron job for `sentry_bot_direct.py`
+7. Offer a test run to verify everything works
 
-### 2. Load environment variables from .env
-
-Add this to your cron or shell script so the API keys are available:
+### Manual setup (if you prefer)
 
 ```bash
-export $(grep -v '^#' /opt/df-sentrybot/.env | xargs)
+# System packages
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv
+
+# Virtual environment + dependencies
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# Playwright Chromium + system libraries
+.venv/bin/playwright install chromium
+sudo .venv/bin/playwright install-deps chromium
+
+# Logs directory
+mkdir -p logs
+
+# Configuration
+cp .env.example .env
+nano .env   # fill in TEAMS_WEBHOOK_URL
 ```
 
-### 3. Schedule with cron (every 6 hours)
+### Cron job (every hour, direct version)
 
 ```bash
 crontab -e
@@ -259,13 +283,24 @@ crontab -e
 Add:
 
 ```cron
-0 */6 * * * cd /opt/df-sentrybot && export $(grep -v '^#' .env | xargs) && .venv/bin/python sentry_bot_brave.py --domains-file domains.txt --count 1 --headless >> logs/sentry.log 2>&1
+0 * * * * cd /opt/df-sentrybot && export $(grep -v '^#' .env | xargs) && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless >> logs/sentry_direct.log 2>&1
 ```
 
-Create the logs directory first:
+### Useful commands on the VPS
 
 ```bash
-mkdir -p /opt/df-sentrybot/logs
+# Check cron is registered
+crontab -l
+
+# Stream live log output
+tail -f /opt/df-sentrybot/logs/sentry_direct.log
+
+# Run manually
+cd /opt/df-sentrybot && export $(grep -v '^#' .env | xargs) && \
+  .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless
+
+# Reset baseline (e.g. after a site redesign)
+rm -f /opt/df-sentrybot/sentry_state_direct.json
 ```
 
 ---
@@ -277,6 +312,7 @@ df-sentrybot/
 ├── sentry_bot_brave.py          # Brave version — compares live page vs search index
 ├── sentry_bot_brave_simple.py   # Brave version — single API request variant
 ├── sentry_bot_direct.py         # Direct version — no search API, hourly + daily digest
+├── setup.sh                     # One-time VPS setup script (run after cloning)
 ├── domains.txt                  # List of domains to monitor
 ├── requirements.txt             # Python dependencies
 ├── .env                         # Your API keys (never commit this)
