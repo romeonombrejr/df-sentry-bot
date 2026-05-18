@@ -170,43 +170,66 @@ def send_teams_alert(webhook_url: str, domain: str,
         return
 
     has_red = any(r["severity"] == "RED" for r in alerts)
-    color   = "FF0000" if has_red else "FFA500"
 
-    sections = []
+    body: list = [
+        {
+            "type":    "TextBlock",
+            "text":    f"DF SentryBot — {len(alerts)} alert(s) on {domain}",
+            "weight":  "Bolder",
+            "size":    "Medium",
+            "color":   "Attention" if has_red else "Warning",
+        },
+        {
+            "type":     "TextBlock",
+            "text":     f"Audit run: {now_iso}",
+            "isSubtle": True,
+            "spacing":  "None",
+        },
+    ]
+
     for r in alerts:
         facts = [
-            {"name": "URL",         "value": r["url"]},
-            {"name": "HTTP status", "value": str(r["status"] or "N/A")},
-            {"name": "Title match", "value": f"{r['title_sim'] * 100:.1f}%"},
-            {"name": "Desc match",  "value": f"{r['desc_sim']  * 100:.1f}%"},
+            {"title": "URL",         "value": r["url"]},
+            {"title": "HTTP status", "value": str(r["status"] or "N/A")},
+            {"title": "Title match", "value": f"{r['title_sim'] * 100:.1f}%"},
+            {"title": "Desc match",  "value": f"{r['desc_sim']  * 100:.1f}%"},
         ]
         cs = r.get("content_sim")
         if cs is not None and cs < THRESHOLD_GREEN:
-            facts.append({"name": "Content match",
-                          "value": f"{cs * 100:.1f}%  (baseline: {r.get('baseline_date', '')})"  })
+            facts.append({"title": "Content match",
+                          "value": f"{cs * 100:.1f}%  (baseline: {r.get('baseline_date', '')})"})
         if r.get("keywords_found"):
-            facts.append({"name": "Hack keywords",
+            facts.append({"title": "Hack keywords",
                           "value": ", ".join(r["keywords_found"])})
         if r.get("note"):
-            facts.append({"name": "Error", "value": r["note"]})
+            facts.append({"title": "Error", "value": r["note"]})
 
-        sections.append({
-            "activityTitle": f"[{r['severity']}]  {r['url']}",
-            "facts":         facts,
+        body.append({
+            "type":    "Container",
+            "style":   "attention" if r["severity"] == "RED" else "warning",
+            "spacing": "Medium",
+            "items": [
+                {"type": "TextBlock", "text": f"[{r['severity']}]  {r['url']}",
+                 "weight": "Bolder"},
+                {"type": "FactSet", "facts": facts},
+            ],
         })
 
     payload = {
-        "@type":      "MessageCard",
-        "@context":   "https://schema.org/extensions",
-        "summary":    f"DF SentryBot — {len(alerts)} alert(s) on {domain}",
-        "themeColor": color,
-        "title":      f"DF SentryBot — {len(alerts)} alert(s) on {domain}",
-        "text":       f"Audit run: {now_iso}",
-        "sections":   sections,
-        "potentialAction": [{
-            "@type":   "OpenUri",
-            "name":    "Visit site",
-            "targets": [{"os": "default", "uri": f"https://{domain}"}],
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "type":    "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5",
+                "body":    body,
+                "actions": [{
+                    "type":  "Action.OpenUrl",
+                    "title": "Visit site",
+                    "url":   f"https://{domain}",
+                }],
+            },
         }],
     }
 

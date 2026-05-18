@@ -285,33 +285,50 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
         return
 
     facts = [
-        {"name": "URL",         "value": url},
-        {"name": "HTTP status", "value": str(meta["status"] or "N/A")},
+        {"title": "URL",         "value": url},
+        {"title": "HTTP status", "value": str(meta["status"] or "N/A")},
     ]
     if content_sim is not None:
-        facts.append({"name": "Content match",
+        facts.append({"title": "Content match",
                       "value": f"{content_sim * 100:.1f}% vs baseline"})
     if meta.get("keywords_found"):
-        facts.append({"name": "Hack keywords",
+        facts.append({"title": "Hack keywords",
                       "value": ", ".join(meta["keywords_found"])})
     if meta.get("note"):
-        facts.append({"name": "Error", "value": meta["note"]})
+        facts.append({"title": "Error", "value": meta["note"]})
 
     payload = {
-        "@type":      "MessageCard",
-        "@context":   "https://schema.org/extensions",
-        "summary":    f"🚨 EMERGENCY — {domain} flagged RED",
-        "themeColor": "FF0000",
-        "title":      f"🚨 EMERGENCY ALERT — {domain}",
-        "text":       (
-            f"A RED flag was detected during the hourly audit at **{now_iso}**. "
-            f"Immediate review recommended."
-        ),
-        "sections": [{"facts": facts}],
-        "potentialAction": [{
-            "@type":   "OpenUri",
-            "name":    "Visit site now",
-            "targets": [{"os": "default", "uri": url}],
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "type":    "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5",
+                "body": [
+                    {
+                        "type":   "TextBlock",
+                        "text":   f"EMERGENCY ALERT — {domain}",
+                        "weight": "Bolder",
+                        "size":   "Large",
+                        "color":  "Attention",
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": (
+                            f"A RED flag was detected during the hourly audit "
+                            f"at {now_iso}. Immediate review recommended."
+                        ),
+                        "wrap": True,
+                    },
+                    {"type": "FactSet", "facts": facts},
+                ],
+                "actions": [{
+                    "type":  "Action.OpenUrl",
+                    "title": "Visit site now",
+                    "url":   url,
+                }],
+            },
         }],
     }
 
@@ -344,46 +361,87 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
     all_clear = len(alerts) == 0
 
     has_red   = any(a["severity"] == "RED" for a in alerts)
-    color     = "00AA00" if all_clear else ("FF0000" if has_red else "FFA500")
     title_str = (
         f"DF SentryBot — All clear ({len(worst)} domain(s) checked)"
         if all_clear else
         f"DF SentryBot — {len(alerts)} domain(s) need attention"
     )
 
-    sections = []
     if all_clear:
-        sections.append({"text": f"No issues detected in the past {report_hours} hour(s). "
-                                 f"All {len(worst)} monitored domain(s) look healthy."})
+        body: list = [
+            {
+                "type":   "TextBlock",
+                "text":   title_str,
+                "weight": "Bolder",
+                "size":   "Medium",
+                "color":  "Good",
+            },
+            {
+                "type": "TextBlock",
+                "text": (
+                    f"No issues detected in the past {report_hours} hour(s). "
+                    f"All {len(worst)} monitored domain(s) look healthy."
+                ),
+                "wrap": True,
+            },
+            {
+                "type":     "TextBlock",
+                "text":     f"Generated: {now_iso}",
+                "isSubtle": True,
+            },
+        ]
     else:
+        body = [
+            {
+                "type":   "TextBlock",
+                "text":   title_str,
+                "weight": "Bolder",
+                "size":   "Medium",
+                "color":  "Attention" if has_red else "Warning",
+            },
+            {
+                "type":     "TextBlock",
+                "text":     f"Report period: last {report_hours} hour(s) — generated {now_iso}",
+                "isSubtle": True,
+                "spacing":  "None",
+            },
+        ]
         for a in sorted(alerts, key=lambda x: 0 if x["severity"] == "RED" else 1):
             facts = [
-                {"name": "Domain",      "value": a["domain"]},
-                {"name": "URL",         "value": a["url"]},
-                {"name": "HTTP status", "value": str(a.get("status") or "N/A")},
+                {"title": "Domain",      "value": a["domain"]},
+                {"title": "URL",         "value": a["url"]},
+                {"title": "HTTP status", "value": str(a.get("status") or "N/A")},
             ]
             cs = a.get("content_sim")
             if cs is not None:
-                facts.append({"name": "Content match",
-                              "value": f"{cs * 100:.1f}%"})
+                facts.append({"title": "Content match", "value": f"{cs * 100:.1f}%"})
             if a.get("keywords_found"):
-                facts.append({"name": "Hack keywords",
+                facts.append({"title": "Hack keywords",
                               "value": ", ".join(a["keywords_found"])})
             if a.get("note"):
-                facts.append({"name": "Error", "value": a["note"]})
-            sections.append({
-                "activityTitle": f"[{a['severity']}]  {a['domain']}",
-                "facts":         facts,
+                facts.append({"title": "Error", "value": a["note"]})
+            body.append({
+                "type":    "Container",
+                "style":   "attention" if a["severity"] == "RED" else "warning",
+                "spacing": "Medium",
+                "items": [
+                    {"type": "TextBlock", "text": f"[{a['severity']}]  {a['domain']}",
+                     "weight": "Bolder"},
+                    {"type": "FactSet", "facts": facts},
+                ],
             })
 
     payload = {
-        "@type":      "MessageCard",
-        "@context":   "https://schema.org/extensions",
-        "summary":    title_str,
-        "themeColor": color,
-        "title":      title_str,
-        "text":       f"Report period: last {report_hours} hour(s) — generated {now_iso}",
-        "sections":   sections,
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "type":    "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5",
+                "body":    body,
+            },
+        }],
     }
 
     try:
