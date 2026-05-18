@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Runtime state (auto-generated, per-machine)
+sentry_state.json
+sentry_state_direct.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Playwright
+playwright-report/
+test-results/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Domains
+domains.txt
