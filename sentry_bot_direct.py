@@ -54,16 +54,80 @@ DEPENDENCIES
 
 import asyncio
 import json
+import logging
 import os
 import random
 import re
 import sys
+import traceback
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+load_dotenv(Path(__file__).parent / ".env")
+
+# ── Error log (written alongside this script) ─────────────────────────────────
+_LOG_DIR  = Path(__file__).parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+_LOG_FILE = _LOG_DIR / "sentry_direct_errors.log"
+
+logging.basicConfig(
+    filename=str(_LOG_FILE),
+    level=logging.ERROR,
+    format="%(asctime)s  %(levelname)s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+def _log_error(label: str, exc: Exception | None = None,
+               response_status: int | None = None,
+               response_body: str | None = None,
+               payload_bytes: int | None = None):
+    parts = [label]
+    if payload_bytes is not None:
+        parts.append(f"payload={payload_bytes}B")
+    if response_status is not None:
+        parts.append(f"http={response_status}")
+    if response_body:
+        parts.append(f"body={response_body[:500]}")
+    if exc:
+        parts.append(traceback.format_exc().strip())
+    msg = " | ".join(parts)
+    logging.error(msg)
+    print(f"  [ERROR logged → {_LOG_FILE}]  {label}"
+          + (f"  HTTP {response_status}" if response_status else "")
+          + (f"  {response_body[:120]}" if response_body else ""))
+
+# ── Teams mention helpers ─────────────────────────────────────────────────────
+
+def _parse_mentions(env_str: str) -> list[dict]:
+    """Parse 'Name:ObjectID,Name2:ObjectID2' from TEAMS_MENTIONS env var."""
+    result = []
+    for part in env_str.split(","):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        name, obj_id = part.split(":", 1)
+        name, obj_id = name.strip(), obj_id.strip()
+        if name and obj_id:
+            result.append({"name": name, "id": obj_id})
+    return result
+
+
+def _mention_text(mentions: list[dict]) -> str:
+    return "  ".join(f"<at>{m['name']}</at>" for m in mentions)
+
+
+def _mention_entities(mentions: list[dict]) -> list[dict]:
+    return [
+        {"type": "mention",
+         "text": f"<at>{m['name']}</at>",
+         "mentioned": {"id": m["id"], "name": m["name"]}}
+        for m in mentions
+    ]
 
 # ── Tunable defaults (all overridable via CLI flags) ──────────────────────────
 THRESHOLD_GREEN       = 0.95
@@ -130,6 +194,13 @@ def save_state(state: dict):
 def normalize(s: str) -> str:
     s = re.sub(r"^[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s*[—–-]\s*", "", (s or "").strip())
     return " ".join(s.lower().split())
+
+
+def _url_for(domain: str) -> str:
+    """Use http:// for localhost/127.x, https:// for everything else."""
+    if domain.startswith("localhost") or re.match(r"^127\.", domain):
+        return f"http://{domain}/"
+    return f"https://{domain}/"
 
 
 def similarity(a: str, b: str) -> float:
@@ -284,6 +355,8 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
     if not webhook_url:
         return
 
+    mentions = _parse_mentions(os.environ.get("TEAMS_MENTIONS", ""))
+
     facts = [
         {"title": "URL",         "value": url},
         {"title": "HTTP status", "value": str(meta["status"] or "N/A")},
@@ -297,47 +370,61 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
     if meta.get("note"):
         facts.append({"title": "Error", "value": meta["note"]})
 
+    body = [
+        {
+            "type":   "TextBlock",
+            "text":   f"EMERGENCY ALERT — {domain}",
+            "weight": "Bolder",
+            "size":   "Large",
+            "color":  "Attention",
+        },
+        {
+            "type": "TextBlock",
+            "text": (
+                f"A RED flag was detected during the hourly audit "
+                f"at {now_iso}. Immediate review recommended."
+                + (f"  {_mention_text(mentions)}" if mentions else "")
+            ),
+            "wrap": True,
+        },
+        {"type": "FactSet", "facts": facts},
+    ]
+
+    content = {
+        "type":    "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.5",
+        "body":    body,
+        "actions": [{
+            "type":  "Action.OpenUrl",
+            "title": "Visit site now",
+            "url":   url,
+        }],
+    }
+    if mentions:
+        content["msteams"] = {"entities": _mention_entities(mentions)}
+
     payload = {
         "type": "message",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": {
-                "type":    "AdaptiveCard",
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5",
-                "body": [
-                    {
-                        "type":   "TextBlock",
-                        "text":   f"EMERGENCY ALERT — {domain}",
-                        "weight": "Bolder",
-                        "size":   "Large",
-                        "color":  "Attention",
-                    },
-                    {
-                        "type": "TextBlock",
-                        "text": (
-                            f"A RED flag was detected during the hourly audit "
-                            f"at {now_iso}. Immediate review recommended."
-                        ),
-                        "wrap": True,
-                    },
-                    {"type": "FactSet", "facts": facts},
-                ],
-                "actions": [{
-                    "type":  "Action.OpenUrl",
-                    "title": "Visit site now",
-                    "url":   url,
-                }],
-            },
+            "content":     content,
         }],
     }
 
+    raw      = json.dumps(payload).encode()
     try:
-        resp = requests.post(webhook_url, json=payload, timeout=10)
-        resp.raise_for_status()
-        print(f"  {_R}{_B}Emergency Teams alert sent for {domain}.{_X}")
+        resp = requests.post(webhook_url, data=raw,
+                             headers={"Content-Type": "application/json"}, timeout=10)
+        if not resp.ok:
+            _log_error(f"Emergency alert failed for {domain}",
+                       response_status=resp.status_code, response_body=resp.text,
+                       payload_bytes=len(raw))
+        else:
+            print(f"  {_R}{_B}Emergency Teams alert sent for {domain}.{_X}")
     except Exception as exc:
-        print(f"  {_R}Emergency Teams alert failed: {exc}{_X}")
+        _log_error(f"Emergency alert exception for {domain}", exc=exc,
+                   payload_bytes=len(raw))
 
 
 # ── Teams digest ──────────────────────────────────────────────────────────────
@@ -357,100 +444,119 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
         ):
             worst[d] = alert
 
-    alerts = [a for a in worst.values() if a["severity"] in ("RED", "YELLOW")]
-    all_clear = len(alerts) == 0
+    flagged = [a for a in worst.values() if a["severity"] in ("RED", "YELLOW")]
+    green   = [a for a in worst.values() if a["severity"] == "GREEN"]
+    all_clear = len(flagged) == 0
 
-    has_red   = any(a["severity"] == "RED" for a in alerts)
+    mentions = _parse_mentions(os.environ.get("TEAMS_MENTIONS", ""))
+
+    has_red      = any(a["severity"] == "RED" for a in flagged)
+    header_color = "Good" if all_clear else ("Attention" if has_red else "Warning")
     title_str = (
-        f"DF SentryBot — All clear ({len(worst)} domain(s) checked)"
+        f"DF SentryBot — All clear  ({len(worst)} domain(s) checked)"
         if all_clear else
-        f"DF SentryBot — {len(alerts)} domain(s) need attention"
+        f"DF SentryBot — {len(flagged)} issue(s) across {len(worst)} domain(s)"
     )
 
-    if all_clear:
-        body: list = [
-            {
-                "type":   "TextBlock",
-                "text":   title_str,
-                "weight": "Bolder",
-                "size":   "Medium",
-                "color":  "Good",
-            },
-            {
-                "type": "TextBlock",
-                "text": (
-                    f"No issues detected in the past {report_hours} hour(s). "
-                    f"All {len(worst)} monitored domain(s) look healthy."
-                ),
-                "wrap": True,
-            },
-            {
-                "type":     "TextBlock",
-                "text":     f"Generated: {now_iso}",
-                "isSubtle": True,
-            },
+    subtitle = f"Report period: last {report_hours} hour(s) — generated {now_iso}"
+    if mentions and not all_clear:
+        subtitle += f"  {_mention_text(mentions)}"
+
+    body: list = [
+        {
+            "type":   "TextBlock",
+            "text":   title_str,
+            "weight": "Bolder",
+            "size":   "Medium",
+            "color":  header_color,
+        },
+        {
+            "type":     "TextBlock",
+            "text":     subtitle,
+            "isSubtle": True,
+            "spacing":  "None",
+            "wrap":     True,
+        },
+    ]
+
+    # RED and YELLOW domains — highlighted containers with full details
+    for a in sorted(flagged, key=lambda x: 0 if x["severity"] == "RED" else 1):
+        facts = [
+            {"title": "URL",         "value": a["url"]},
+            {"title": "HTTP status", "value": str(a.get("status") or "N/A")},
         ]
-    else:
-        body = [
-            {
-                "type":   "TextBlock",
-                "text":   title_str,
-                "weight": "Bolder",
-                "size":   "Medium",
-                "color":  "Attention" if has_red else "Warning",
-            },
-            {
-                "type":     "TextBlock",
-                "text":     f"Report period: last {report_hours} hour(s) — generated {now_iso}",
-                "isSubtle": True,
-                "spacing":  "None",
-            },
-        ]
-        for a in sorted(alerts, key=lambda x: 0 if x["severity"] == "RED" else 1):
-            facts = [
-                {"title": "Domain",      "value": a["domain"]},
-                {"title": "URL",         "value": a["url"]},
-                {"title": "HTTP status", "value": str(a.get("status") or "N/A")},
-            ]
-            cs = a.get("content_sim")
-            if cs is not None:
-                facts.append({"title": "Content match", "value": f"{cs * 100:.1f}%"})
-            if a.get("keywords_found"):
-                facts.append({"title": "Hack keywords",
-                              "value": ", ".join(a["keywords_found"])})
-            if a.get("note"):
-                facts.append({"title": "Error", "value": a["note"]})
-            body.append({
-                "type":    "Container",
-                "style":   "attention" if a["severity"] == "RED" else "warning",
-                "spacing": "Medium",
-                "items": [
-                    {"type": "TextBlock", "text": f"[{a['severity']}]  {a['domain']}",
-                     "weight": "Bolder"},
-                    {"type": "FactSet", "facts": facts},
-                ],
-            })
+        cs = a.get("content_sim")
+        if cs is not None:
+            facts.append({"title": "Content match", "value": f"{cs * 100:.1f}%"})
+        if a.get("keywords_found"):
+            facts.append({"title": "Hack keywords",
+                          "value": ", ".join(a["keywords_found"])})
+        if a.get("note"):
+            facts.append({"title": "Error", "value": a["note"]})
+        body.append({
+            "type":    "Container",
+            "style":   "attention" if a["severity"] == "RED" else "warning",
+            "spacing": "Medium",
+            "items": [
+                {"type": "TextBlock",
+                 "text": f"[{a['severity']}]  {a['domain']}",
+                 "weight": "Bolder"},
+                {"type": "FactSet", "facts": facts},
+            ],
+        })
+
+    # GREEN domains — compact list at the bottom
+    if green:
+        green_list = "  ·  ".join(
+            sorted(a["domain"] for a in green)
+        )
+        body.append({
+            "type":    "Container",
+            "style":   "good",
+            "spacing": "Medium",
+            "items": [
+                {"type": "TextBlock",
+                 "text": f"No issues ({len(green)} domain(s))",
+                 "weight": "Bolder",
+                 "color":  "Good"},
+                {"type": "TextBlock",
+                 "text": green_list,
+                 "wrap": True,
+                 "isSubtle": True},
+            ],
+        })
+
+    content = {
+        "type":    "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.5",
+        "body":    body,
+    }
+    if mentions and not all_clear:
+        content["msteams"] = {"entities": _mention_entities(mentions)}
 
     payload = {
         "type": "message",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": {
-                "type":    "AdaptiveCard",
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5",
-                "body":    body,
-            },
+            "content":     content,
         }],
     }
 
+    raw = json.dumps(payload).encode()
+    print(f"  Sending Teams digest  ({len(raw)} bytes) …")
     try:
-        resp = requests.post(webhook_url, json=payload, timeout=10)
-        resp.raise_for_status()
-        status_label = "All-clear digest" if all_clear else f"Digest ({len(alerts)} alert(s))"
-        print(f"\n  {_G}Teams {status_label} sent.{_X}")
+        resp = requests.post(webhook_url, data=raw,
+                             headers={"Content-Type": "application/json"}, timeout=15)
+        if not resp.ok:
+            _log_error("Digest webhook rejected",
+                       response_status=resp.status_code, response_body=resp.text,
+                       payload_bytes=len(raw))
+        else:
+            status_label = "All-clear digest" if all_clear else f"Digest ({len(flagged)} alert(s))"
+            print(f"\n  {_G}Teams {status_label} sent.{_X}")
     except Exception as exc:
-        print(f"\n  {_R}Teams webhook failed: {exc}{_X}")
+        _log_error("Digest webhook exception", exc=exc, payload_bytes=len(raw))
 
 
 # ── Orchestration ─────────────────────────────────────────────────────────────
@@ -493,7 +599,7 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
         page = await ctx.new_page()
 
         for domain in domains:
-            url          = f"https://{domain}/"
+            url          = _url_for(domain)
             domain_state = domains_state.setdefault(domain, {})
             pages_state  = domain_state.setdefault("pages", {})
             is_first_run = "baseline_set" not in domain_state
@@ -542,18 +648,17 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
                 send_emergency_alert(teams_webhook, domain, url,
                                      meta, content_sim, now_iso)
 
-            # Accumulate non-GREEN results for the digest
-            if sev in ("RED", "YELLOW"):
-                pending_alerts.append({
-                    "timestamp":      now_iso,
-                    "domain":         domain,
-                    "url":            url,
-                    "severity":       sev,
-                    "status":         meta["status"],
-                    "content_sim":    content_sim,
-                    "keywords_found": kw_found,
-                    "note":           meta["note"],
-                })
+            # Accumulate all results for the full status digest
+            pending_alerts.append({
+                "timestamp":      now_iso,
+                "domain":         domain,
+                "url":            url,
+                "severity":       sev,
+                "status":         meta["status"],
+                "content_sim":    content_sim,
+                "keywords_found": kw_found,
+                "note":           meta["note"],
+            })
 
             # Update state
             page_entry = pages_state.setdefault(url, {})
@@ -575,7 +680,8 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
             domain_state["last_run"]         = now_iso
             domain_state["last_run_had_red"] = (sev == "RED")
 
-            all_results.append({"domain": domain, "severity": sev})
+            all_results.append({"domain": domain, "severity": sev,
+                                "is_first_run": is_first_run})
 
         await browser.close()
 
@@ -593,7 +699,14 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
     print(DASH)
 
     # ── Teams digest ──────────────────────────────────────────────────────
-    if should_report:
+    any_comparison = any(not r.get("is_first_run") for r in all_results)
+
+    if not any_comparison:
+        # All domains were on their first run — baseline saved, nothing compared yet.
+        # Leave last_report unset so the very next run sends the first real digest.
+        print(f"  First run complete — baseline saved for {len(all_results)} domain(s).")
+        print(f"  Teams digest will be sent on the next run.")
+    elif should_report:
         send_teams_digest(teams_webhook, pending_alerts, now_iso, report_hours)
         state["pending_alerts"] = []
         state["last_report"]    = now_iso

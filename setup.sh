@@ -80,6 +80,8 @@ else
 
     echo ""
     echo "  Enter your Microsoft Teams Incoming Webhook URL."
+    echo "  How to create one: open the target Teams channel → ··· → Workflows"
+    echo "  → 'Post to a channel when a webhook request is received' → copy the URL."
     echo "  (Leave blank to skip — you can add it to .env later)"
     echo ""
     read -rp "  TEAMS_WEBHOOK_URL: " TEAMS_URL
@@ -89,6 +91,9 @@ else
     else
         warn "Teams webhook skipped — alerts will not be sent until you add it to .env"
     fi
+    echo ""
+    echo "  Optional: to @mention people in RED alerts, edit .env after setup"
+    echo "  and fill in TEAMS_MENTIONS=Name:AzureADObjectID (comma-separated)."
 fi
 
 # Logs directory

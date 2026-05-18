@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(Remove-Item \"c:\\\\Users\\\\Romeo\\\\Rome - test projects\\\\DF SentryBot\\\\sentry_state.json\" -ErrorAction SilentlyContinue)",
-      "Bash(Write-Host \"Done\")"
+      "Bash(Write-Host \"Done\")",
+      "Bash(python test_webhook.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import flask; print\\('Flask', flask.__version__\\)\")",
+      "Bash(pip install *)"
     ]
   }
 }
