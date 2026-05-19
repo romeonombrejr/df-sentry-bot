@@ -500,7 +500,7 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
     )
 
     subtitle = f"Report period: last {report_hours} hour(s) — generated {now_iso}"
-    if mentions and not all_clear:
+    if mentions:
         subtitle += f"  {_mention_text(mentions)}"
 
     body: list = [
@@ -576,7 +576,7 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
         "version": "1.5",
         "body":    body,
     }
-    if mentions and not all_clear:
+    if mentions:
         content["msteams"] = {"entities": _mention_entities(mentions)}
 
     payload = {
