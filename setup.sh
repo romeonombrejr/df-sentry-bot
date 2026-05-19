@@ -93,7 +93,13 @@ else
     echo ""
     read -rp "  TEAMS_WEBHOOK_URL: " TEAMS_URL
     if [ -n "$TEAMS_URL" ]; then
-        sed -i "s|TEAMS_WEBHOOK_URL=|TEAMS_WEBHOOK_URL=$TEAMS_URL|" "$PROJECT_DIR/.env"
+        python3 - "$PROJECT_DIR/.env" "TEAMS_WEBHOOK_URL" "$TEAMS_URL" <<'PYEOF'
+import sys, pathlib, re
+f, key, val = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = f.read_text()
+text = re.sub(rf'^{key}=.*', f'{key}="{val}"', text, flags=re.MULTILINE)
+f.write_text(text)
+PYEOF
         info "Teams webhook saved to .env"
     else
         warn "Teams webhook skipped — alerts will not be sent until you add it to .env"
@@ -107,7 +113,13 @@ else
     echo ""
     read -rp "  TEAMS_MENTIONS: " TEAMS_MENTIONS_VAL
     if [ -n "$TEAMS_MENTIONS_VAL" ]; then
-        sed -i "s|TEAMS_MENTIONS=|TEAMS_MENTIONS=$TEAMS_MENTIONS_VAL|" "$PROJECT_DIR/.env"
+        python3 - "$PROJECT_DIR/.env" "TEAMS_MENTIONS" "$TEAMS_MENTIONS_VAL" <<'PYEOF'
+import sys, pathlib, re
+f, key, val = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = f.read_text()
+text = re.sub(rf'^{key}=.*', f'{key}="{val}"', text, flags=re.MULTILINE)
+f.write_text(text)
+PYEOF
         info "Teams mentions saved to .env"
     else
         warn "Teams mentions skipped — add TEAMS_MENTIONS to .env manually if needed"
