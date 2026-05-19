@@ -27,12 +27,19 @@ echo "  Script            : sentry_bot_direct.py (no search API required)"
 # ── 1. System packages ────────────────────────────────────────────────────────
 section "Step 1/6 — System packages"
 
-if ! command -v python3 &>/dev/null; then
-    warn "python3 not found — installing via apt"
-    sudo apt-get update -qq
-    sudo apt-get install -y python3 python3-pip python3-venv
+# Accept any PPA label changes so apt-get update doesn't abort
+apt-get update --allow-releaseinfo-change -qq
+
+# Install Python 3.13 via deadsnakes PPA if not already present
+if command -v python3.13 &>/dev/null; then
+    info "Python 3.13 already installed: $(python3.13 --version)"
 else
-    info "Python: $(python3 --version)"
+    info "Installing Python 3.13 via deadsnakes PPA…"
+    apt-get install -y software-properties-common -qq
+    add-apt-repository ppa:deadsnakes/ppa -y
+    apt-get update --allow-releaseinfo-change -qq
+    apt-get install -y python3.13 python3.13-venv
+    info "Python 3.13 installed: $(python3.13 --version)"
 fi
 
 # ── 2. Virtual environment ────────────────────────────────────────────────────
@@ -41,8 +48,8 @@ section "Step 2/6 — Virtual environment"
 if [ -d "$PROJECT_DIR/.venv" ]; then
     info ".venv already exists — skipping creation"
 else
-    python3 -m venv "$PROJECT_DIR/.venv"
-    info "Created .venv"
+    python3.13 -m venv "$PROJECT_DIR/.venv"
+    info "Created .venv (Python 3.13)"
 fi
 
 PYTHON="$PROJECT_DIR/.venv/bin/python"
@@ -64,8 +71,8 @@ section "Step 4/6 — Playwright Chromium"
 info "Chromium browser installed"
 
 echo ""
-echo "  Installing Chromium system libraries (requires sudo)…"
-sudo "$PROJECT_DIR/.venv/bin/playwright" install-deps chromium
+echo "  Installing Chromium system libraries…"
+"$PROJECT_DIR/.venv/bin/playwright" install-deps chromium
 info "System libraries installed"
 
 # ── 5. Configuration ──────────────────────────────────────────────────────────
@@ -79,7 +86,7 @@ else
     info "Created .env from .env.example"
 
     echo ""
-    echo "  Enter your Microsoft Teams Incoming Webhook URL."
+    echo "  Enter your Microsoft Teams Workflow Webhook URL."
     echo "  How to create one: open the target Teams channel → ··· → Workflows"
     echo "  → 'Post to a channel when a webhook request is received' → copy the URL."
     echo "  (Leave blank to skip — you can add it to .env later)"
@@ -91,9 +98,20 @@ else
     else
         warn "Teams webhook skipped — alerts will not be sent until you add it to .env"
     fi
+
     echo ""
-    echo "  Optional: to @mention people in RED alerts, edit .env after setup"
-    echo "  and fill in TEAMS_MENTIONS=Name:AzureADObjectID (comma-separated)."
+    echo "  Optional: @mention people in RED/YELLOW Teams alerts."
+    echo "  Format  : Name:AzureADObjectID — comma-separated for multiple people."
+    echo "  Find IDs: Teams Admin Centre → Users → click person → Object ID"
+    echo "  (Leave blank to skip — you can add TEAMS_MENTIONS to .env later)"
+    echo ""
+    read -rp "  TEAMS_MENTIONS: " TEAMS_MENTIONS_VAL
+    if [ -n "$TEAMS_MENTIONS_VAL" ]; then
+        sed -i "s|TEAMS_MENTIONS=|TEAMS_MENTIONS=$TEAMS_MENTIONS_VAL|" "$PROJECT_DIR/.env"
+        info "Teams mentions saved to .env"
+    else
+        warn "Teams mentions skipped — add TEAMS_MENTIONS to .env manually if needed"
+    fi
 fi
 
 # Logs directory
@@ -106,9 +124,9 @@ if [ -f "$LOGROTATE_CONF" ]; then
     info "logrotate config already exists — skipping"
 else
     echo ""
-    read -rp "  Set up log rotation via logrotate? (keeps 30 days, requires sudo) [Y/n]: " ADD_LR
+    read -rp "  Set up log rotation via logrotate? (keeps 30 days) [Y/n]: " ADD_LR
     if [[ ! "${ADD_LR:-Y}" =~ ^[Nn]$ ]]; then
-        sudo tee "$LOGROTATE_CONF" > /dev/null << EOF
+        tee "$LOGROTATE_CONF" > /dev/null << EOF
 $PROJECT_DIR/logs/*.log {
     daily
     rotate 30
@@ -167,12 +185,14 @@ echo "  Project   : $PROJECT_DIR"
 echo "  Config    : $PROJECT_DIR/.env"
 echo "  Domains   : $PROJECT_DIR/domains.txt"
 echo "  Logs      : $PROJECT_DIR/logs/sentry_direct.log"
+echo "  Errors    : $PROJECT_DIR/logs/sentry_direct_errors.log"
 echo ""
 echo "  Useful commands:"
-echo "    View cron job  : crontab -l"
-echo "    Stream logs    : tail -f $PROJECT_DIR/logs/sentry_direct.log"
-echo "    Reset baseline : rm -f $PROJECT_DIR/sentry_state_direct.json"
-echo "    Manual run     : cd $PROJECT_DIR && export \$(grep -v '^#' .env | xargs) && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless"
+echo "    View cron job   : crontab -l"
+echo "    Stream logs     : tail -f $PROJECT_DIR/logs/sentry_direct.log"
+echo "    Webhook errors  : cat $PROJECT_DIR/logs/sentry_direct_errors.log"
+echo "    Reset baseline  : rm -f $PROJECT_DIR/sentry_state_direct.json"
+echo "    Manual run      : cd $PROJECT_DIR && export \$(grep -v '^#' .env | xargs) && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless"
 echo ""
 
 read -rp "  Run a test audit now to verify everything works? [Y/n]: " RUN_TEST
