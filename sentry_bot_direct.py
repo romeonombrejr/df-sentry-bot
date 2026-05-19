@@ -169,7 +169,7 @@ _X = "\033[0m"
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
+    "Chrome/136.0.0.0 Safari/537.36"
 )
 
 SEP  = "═" * 64
@@ -640,6 +640,9 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
             },
             locale="en-US",
         )
+        await ctx.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         page = await ctx.new_page()
 
         for domain in domains:
@@ -658,17 +661,24 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
                           f"clean — refreshing after this audit.{_X}")
 
             print(f"\n  Auditing {url} …")
-            try:
-                meta = await asyncio.wait_for(fetch_page(page, url), timeout=FETCH_TIMEOUT_SEC)
-            except asyncio.TimeoutError:
-                print(f"  Timed out after {FETCH_TIMEOUT_SEC}s — resetting browser page")
-                meta = {"status": 0, "title": "", "description": "",
-                        "content_text": "", "keywords_found": [],
-                        "note": f"Audit timed out after {FETCH_TIMEOUT_SEC}s"}
+            meta = None
+            for attempt in range(2):
                 try:
-                    await page.goto("about:blank", wait_until="domcontentloaded", timeout=5_000)
-                except Exception:
-                    pass
+                    meta = await asyncio.wait_for(fetch_page(page, url), timeout=FETCH_TIMEOUT_SEC)
+                    break
+                except asyncio.TimeoutError:
+                    try:
+                        await page.goto("about:blank", wait_until="domcontentloaded", timeout=5_000)
+                    except Exception:
+                        pass
+                    if attempt == 0:
+                        print(f"  Timed out — retrying in 5s…")
+                        await asyncio.sleep(5)
+                    else:
+                        print(f"  Timed out after {FETCH_TIMEOUT_SEC}s (2 attempts) — marking RED")
+                        meta = {"status": 0, "title": "", "description": "",
+                                "content_text": "", "keywords_found": [],
+                                "note": f"Audit timed out after {FETCH_TIMEOUT_SEC}s (2 attempts)"}
             await page.wait_for_timeout(700)
 
             saved = pages_state.get(url, {})
