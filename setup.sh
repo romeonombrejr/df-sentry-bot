@@ -31,15 +31,15 @@ section "Step 1/6 — System packages"
 apt-get update --allow-releaseinfo-change -qq
 
 # Install Python 3.13 via deadsnakes PPA if not already present
-if command -v python3.13 &>/dev/null; then
-    info "Python 3.13 already installed: $(python3.13 --version)"
+if command -v python3.9 &>/dev/null; then
+    info "Python 3.13 already installed: $(python3.9 --version)"
 else
     info "Installing Python 3.13 via deadsnakes PPA…"
     apt-get install -y software-properties-common -qq
     add-apt-repository ppa:deadsnakes/ppa -y
     apt-get update --allow-releaseinfo-change -qq
-    apt-get install -y python3.13 python3.13-venv
-    info "Python 3.13 installed: $(python3.13 --version)"
+    apt-get install -y python3.9 python3.9-venv
+    info "Python 3.13 installed: $(python3.9 --version)"
 fi
 
 # ── 2. Virtual environment ────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ section "Step 2/6 — Virtual environment"
 if [ -d "$PROJECT_DIR/.venv" ]; then
     info ".venv already exists — skipping creation"
 else
-    python3.13 -m venv "$PROJECT_DIR/.venv"
+    python3.9 -m venv "$PROJECT_DIR/.venv"
     info "Created .venv (Python 3.13)"
 fi
 
