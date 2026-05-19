@@ -70,7 +70,7 @@ import requests
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 # ── Error log (written alongside this script) ─────────────────────────────────
 _LOG_DIR  = Path(__file__).parent / "logs"
