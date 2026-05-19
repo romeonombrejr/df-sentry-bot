@@ -472,7 +472,8 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
 # ── Teams digest ──────────────────────────────────────────────────────────────
 
 def _build_timeline_table(pending: list[dict]) -> str:
-    """Build an hourly timeline grid: hours × domains with severity symbols."""
+    """Build an hourly timeline grid: hours × domains with severity symbols.
+    Splits into multiple tables if more than 4 domains (4 columns max per table)."""
     if not pending:
         return ""
 
@@ -507,35 +508,50 @@ def _build_timeline_table(pending: list[dict]) -> str:
     # Symbols for each severity
     symbols = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
     
-    # Build table header
-    # Truncate long domain names to keep table readable
-    max_domain_len = 12
-    domain_labels = [d[:max_domain_len] for d in domains]
+    # Split domains into chunks of 4
+    MAX_COLS_PER_TABLE = 4
+    domain_chunks = [domains[i:i + MAX_COLS_PER_TABLE] 
+                     for i in range(0, len(domains), MAX_COLS_PER_TABLE)]
     
-    # Calculate column widths
-    col_width = max(max_domain_len, 6)
+    all_tables = []
     
-    lines = []
-    lines.append("**AUDIT TIMELINE** (last {} hour(s))".format(len(hours)))
-    lines.append("")
-    
-    # Header row
-    header = "Time  │ " + " │ ".join(f"{d:^{col_width}}" for d in domain_labels)
-    lines.append(header)
-    lines.append("─" * len(header))
-    
-    # Data rows
-    for hour in hours:
-        cells = []
-        for domain in domains:
-            severity = grid_data.get((hour, domain))
-            symbol = symbols.get(severity, "⚪") if severity else "⚪"
-            cells.append(f"{symbol:^{col_width}}")
+    for chunk_idx, domain_chunk in enumerate(domain_chunks):
+        # Truncate long domain names to keep table readable
+        max_domain_len = 12
+        domain_labels = [d[:max_domain_len] for d in domain_chunk]
         
-        row = f"{hour} │ " + " │ ".join(cells)
-        lines.append(row)
+        # Calculate column widths
+        col_width = max(max_domain_len, 6)
+        
+        table_lines = []
+        
+        # Title for first table only, or indicate continuation
+        if chunk_idx == 0:
+            table_lines.append("**AUDIT TIMELINE** (last {} hour(s))".format(len(hours)))
+        else:
+            table_lines.append("**AUDIT TIMELINE** (continued)")
+        table_lines.append("")
+        
+        # Header row
+        header = "Time  │ " + " │ ".join(f"{d:^{col_width}}" for d in domain_labels)
+        table_lines.append(header)
+        table_lines.append("─" * len(header))
+        
+        # Data rows
+        for hour in hours:
+            cells = []
+            for domain in domain_chunk:
+                severity = grid_data.get((hour, domain))
+                symbol = symbols.get(severity, "⚪") if severity else "⚪"
+                cells.append(f"{symbol:^{col_width}}")
+            
+            row = f"{hour} │ " + " │ ".join(cells)
+            table_lines.append(row)
+        
+        all_tables.append("\n".join(table_lines))
     
-    return "\n".join(lines)
+    # Join all tables with spacing
+    return "\n\n".join(all_tables)
 
 
 def send_teams_digest(webhook_url: str, pending: list[dict],
