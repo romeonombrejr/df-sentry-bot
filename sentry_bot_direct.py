@@ -282,28 +282,48 @@ async def fetch_page(page, url: str) -> dict:
         )).lower()
         keywords_found = [kw for kw in HACK_KEYWORDS if kw in body_lower]
 
+        # Collect unique external hostnames — links pointing to a different domain.
+        # Internal navigation links are excluded; only cross-domain hrefs are kept.
+        external_links = await page.evaluate("""
+            () => {
+                const host = window.location.hostname.replace(/^www\\./, '');
+                const seen = new Set();
+                document.querySelectorAll('a[href]').forEach(a => {
+                    try {
+                        const h = new URL(a.href).hostname.replace(/^www\\./, '');
+                        if (h && h !== host && !h.endsWith('.' + host)) seen.add(h);
+                    } catch {}
+                });
+                return Array.from(seen).sort().join(' ');
+            }
+        """)
+
         return {
             "status":         status,
             "title":          title,
             "description":    desc,
             "content_text":   content_text,
+            "external_links": external_links,
             "keywords_found": keywords_found,
             "note":           "",
         }
 
     except PlaywrightTimeout:
         return {"status": 0, "title": "", "description": "",
-                "content_text": "", "keywords_found": [], "note": "Request timed out"}
+                "content_text": "", "external_links": "",
+                "keywords_found": [], "note": "Request timed out"}
     except Exception as exc:
         return {"status": 0, "title": "", "description": "",
-                "content_text": "", "keywords_found": [], "note": str(exc)}
+                "content_text": "", "external_links": "",
+                "keywords_found": [], "note": str(exc)}
 
 
 # ── Terminal output ───────────────────────────────────────────────────────────
 
 def print_result(domain: str, url: str, meta: dict, saved: dict,
                  title_sim: float | None, desc_sim: float | None,
-                 content_sim: float | None, sev: str, is_first_run: bool):
+                 content_sim: float | None, sev: str, is_first_run: bool,
+                 new_externals: set | None = None):
     col = severity_colour(sev)
     baseline_date = saved.get("baseline_set", "")[:10]
 
@@ -336,6 +356,22 @@ def print_result(domain: str, url: str, meta: dict, saved: dict,
     else:
         print(f"    Status    : {_D}First run — baseline saved{_X}")
 
+    print(f"\n  {_B}External links{_X}")
+    if is_first_run:
+        live_ext = meta.get("external_links", "")
+        if live_ext:
+            print(f"    Found     : {live_ext}")
+        print(f"    vs base   : {_D}First run — baseline saved{_X}")
+    elif new_externals:
+        print(f"    {_Y}{_B}New domains : {' '.join(sorted(new_externals))}{_X}")
+        known = set(meta.get("external_links", "").split()) - new_externals
+        if known:
+            print(f"    Known     : {' '.join(sorted(known))}")
+    else:
+        live_ext = meta.get("external_links", "")
+        print(f"    Status    : {_G}unchanged{_X}"
+              + (f"  ({live_ext})" if live_ext else "  (none)"))
+
     kw = meta.get("keywords_found")
     if kw:
         print(f"\n  {_R}{_B}Hack keywords detected:{_X}")
@@ -350,7 +386,7 @@ def print_result(domain: str, url: str, meta: dict, saved: dict,
 
 def send_emergency_alert(webhook_url: str, domain: str, url: str,
                          meta: dict, content_sim: float | None,
-                         now_iso: str):
+                         new_externals: set, now_iso: str):
     """Fires immediately when a domain is flagged RED — does not wait for digest."""
     if not webhook_url:
         return
@@ -367,6 +403,9 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
     if meta.get("keywords_found"):
         facts.append({"title": "Hack keywords",
                       "value": ", ".join(meta["keywords_found"])})
+    if new_externals:
+        facts.append({"title": "New external links",
+                      "value": ", ".join(sorted(new_externals))})
     if meta.get("note"):
         facts.append({"title": "Error", "value": meta["note"]})
 
@@ -491,6 +530,9 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
         if a.get("keywords_found"):
             facts.append({"title": "Hack keywords",
                           "value": ", ".join(a["keywords_found"])})
+        if a.get("new_externals"):
+            facts.append({"title": "New external links",
+                          "value": ", ".join(a["new_externals"])})
         if a.get("note"):
             facts.append({"title": "Error", "value": a["note"]})
         body.append({
@@ -640,13 +682,24 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
             kw_found = meta.get("keywords_found", [])
             sev      = classify(meta["status"], title_sim, desc_sim, content_sim, kw_found)
 
+            # External link diff — new hostnames not present in the saved baseline
+            live_ext_str     = meta.get("external_links", "")
+            baseline_ext_str = saved.get("baseline_external_links", "")
+            if not is_first_run:
+                new_externals = set(live_ext_str.split()) - set(baseline_ext_str.split())
+                if new_externals and sev == "GREEN":
+                    sev = "YELLOW"
+            else:
+                new_externals = set()
+
             print_result(domain, url, meta, saved,
-                         title_sim, desc_sim, content_sim, sev, is_first_run)
+                         title_sim, desc_sim, content_sim, sev, is_first_run,
+                         new_externals)
 
             # Immediate emergency alert for RED — does not wait for digest
             if sev == "RED":
                 send_emergency_alert(teams_webhook, domain, url,
-                                     meta, content_sim, now_iso)
+                                     meta, content_sim, new_externals, now_iso)
 
             # Accumulate all results for the full status digest
             pending_alerts.append({
@@ -657,21 +710,24 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
                 "status":         meta["status"],
                 "content_sim":    content_sim,
                 "keywords_found": kw_found,
+                "new_externals":  sorted(new_externals),
                 "note":           meta["note"],
             })
 
             # Update state
             page_entry = pages_state.setdefault(url, {})
-            page_entry["last_title"]   = meta["title"]
-            page_entry["last_desc"]    = meta["description"]
-            page_entry["last_content"] = meta["content_text"]
-            page_entry["last_seen"]    = now_iso
+            page_entry["last_title"]          = meta["title"]
+            page_entry["last_desc"]           = meta["description"]
+            page_entry["last_content"]        = meta["content_text"]
+            page_entry["last_external_links"] = live_ext_str
+            page_entry["last_seen"]           = now_iso
 
             if is_first_run or refreshed or "baseline_content" not in page_entry:
-                page_entry["baseline_title"]   = meta["title"]
-                page_entry["baseline_desc"]    = meta["description"]
-                page_entry["baseline_content"] = meta["content_text"]
-                page_entry["baseline_set"]     = now_iso
+                page_entry["baseline_title"]          = meta["title"]
+                page_entry["baseline_desc"]           = meta["description"]
+                page_entry["baseline_content"]        = meta["content_text"]
+                page_entry["baseline_external_links"] = live_ext_str
+                page_entry["baseline_set"]            = now_iso
 
             if is_first_run or refreshed:
                 domain_state["baseline_set"] = now_iso
