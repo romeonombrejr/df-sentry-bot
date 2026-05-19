@@ -113,9 +113,6 @@ infosoft.se
 ## Usage
 
 ```bash
-# Load environment variables first (Linux)
-export $(grep -v '^#' .env | xargs)
-
 # Audit all domains in domains.txt
 python sentry_bot_direct.py --domains-file domains.txt --headless
 
@@ -169,7 +166,7 @@ python sentry_bot_direct.py --domains-file domains.txt --report-hours 12 --basel
 #### Direct version cron setup
 
 ```cron
-0 * * * * cd /opt/df-sentrybot && export $(grep -v '^#' .env | xargs) && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless >> logs/sentry_direct.log 2>&1
+0 * * * * cd /opt/df-sentrybot && set -a && source .env && set +a && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless >> logs/sentry_direct.log 2>&1
 ```
 
 #### Direct version state and logs
@@ -308,7 +305,7 @@ tail -f /opt/df-sentrybot/logs/sentry_direct.log
 cat /opt/df-sentrybot/logs/sentry_direct_errors.log
 
 # Run manually
-cd /opt/df-sentrybot && export $(grep -v '^#' .env | xargs) && \
+cd /opt/df-sentrybot && set -a && source .env && set +a && \
   .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless
 
 # Reset baseline (e.g. after a site redesign)

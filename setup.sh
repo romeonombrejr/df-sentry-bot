@@ -152,7 +152,7 @@ fi
 section "Step 6/6 — Cron job"
 
 CRON_MARKER="sentry_bot_direct"
-CRON_CMD="0 * * * * cd $PROJECT_DIR && export \$(grep -v '^#' .env | xargs) && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless >> logs/sentry_direct.log 2>&1"
+CRON_CMD="0 * * * * cd $PROJECT_DIR && set -a && source .env && set +a && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless >> logs/sentry_direct.log 2>&1"
 
 if crontab -l 2>/dev/null | grep -q "$CRON_MARKER"; then
     info "Cron job already exists — skipping"
@@ -192,7 +192,7 @@ echo "    View cron job   : crontab -l"
 echo "    Stream logs     : tail -f $PROJECT_DIR/logs/sentry_direct.log"
 echo "    Webhook errors  : cat $PROJECT_DIR/logs/sentry_direct_errors.log"
 echo "    Reset baseline  : rm -f $PROJECT_DIR/sentry_state_direct.json"
-echo "    Manual run      : cd $PROJECT_DIR && export \$(grep -v '^#' .env | xargs) && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless"
+echo "    Manual run      : cd $PROJECT_DIR && set -a && source .env && set +a && .venv/bin/python sentry_bot_direct.py --domains-file domains.txt --headless"
 echo ""
 
 read -rp "  Run a test audit now to verify everything works? [Y/n]: " RUN_TEST
