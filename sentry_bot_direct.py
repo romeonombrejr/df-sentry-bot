@@ -630,8 +630,20 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
 
     all_results = []
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=headless)
+    async def _new_page(pw):
+        browser = await pw.chromium.launch(
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--no-first-run",
+                "--disable-default-apps",
+            ],
+        )
         ctx = await browser.new_context(
             user_agent=BROWSER_UA,
             viewport={
@@ -643,9 +655,18 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
         await ctx.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
-        page = await ctx.new_page()
+        return browser, await ctx.new_page()
 
-        for domain in domains:
+    BROWSER_RECYCLE = 3  # restart browser every N domains to free memory
+
+    async with async_playwright() as pw:
+        browser, page = await _new_page(pw)
+
+        for i, domain in enumerate(domains):
+            if i > 0 and i % BROWSER_RECYCLE == 0:
+                await browser.close()
+                browser, page = await _new_page(pw)
+                print(f"  [browser recycled after {i} domains]")
             url          = _url_for(domain)
             domain_state = domains_state.setdefault(domain, {})
             pages_state  = domain_state.setdefault("pages", {})
@@ -751,7 +772,7 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
             all_results.append({"domain": domain, "severity": sev,
                                 "is_first_run": is_first_run})
 
-        await browser.close()
+        await browser.close()  # close final browser instance
 
     # ── Summary ───────────────────────────────────────────────────────────
     counts = {"GREEN": 0, "YELLOW": 0, "RED": 0}
