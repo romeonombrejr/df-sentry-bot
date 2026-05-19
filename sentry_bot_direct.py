@@ -449,6 +449,7 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
         "type": "message",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": None,
             "content":     content,
         }],
     }
@@ -469,6 +470,73 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
 
 
 # ── Teams digest ──────────────────────────────────────────────────────────────
+
+def _build_timeline_table(pending: list[dict]) -> str:
+    """Build an hourly timeline grid: hours × domains with severity symbols."""
+    if not pending:
+        return ""
+
+    # Group alerts by (hour, domain) → keep worst severity
+    from collections import defaultdict
+    grid_data: dict[tuple[str, str], str] = {}  # (hour, domain) → severity
+    
+    for alert in pending:
+        ts = alert["timestamp"]
+        # Extract hour: "2026-05-19T14:30:00" → "14:00"
+        hour = ts[11:13] + ":00"
+        domain = alert["domain"]
+        severity = alert["severity"]
+        
+        key = (hour, domain)
+        if key not in grid_data or (
+            severity == "RED" or
+            (severity == "YELLOW" and grid_data[key] == "GREEN")
+        ):
+            grid_data[key] = severity
+    
+    if not grid_data:
+        return ""
+    
+    # Get unique hours and domains, sorted
+    hours = sorted(set(h for h, _ in grid_data.keys()))
+    domains = sorted(set(d for _, d in grid_data.keys()))
+    
+    if not hours or not domains:
+        return ""
+    
+    # Symbols for each severity
+    symbols = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
+    
+    # Build table header
+    # Truncate long domain names to keep table readable
+    max_domain_len = 12
+    domain_labels = [d[:max_domain_len] for d in domains]
+    
+    # Calculate column widths
+    col_width = max(max_domain_len, 6)
+    
+    lines = []
+    lines.append("**AUDIT TIMELINE** (last {} hour(s))".format(len(hours)))
+    lines.append("")
+    
+    # Header row
+    header = "Time  │ " + " │ ".join(f"{d:^{col_width}}" for d in domain_labels)
+    lines.append(header)
+    lines.append("─" * len(header))
+    
+    # Data rows
+    for hour in hours:
+        cells = []
+        for domain in domains:
+            severity = grid_data.get((hour, domain))
+            symbol = symbols.get(severity, "⚪") if severity else "⚪"
+            cells.append(f"{symbol:^{col_width}}")
+        
+        row = f"{hour} │ " + " │ ".join(cells)
+        lines.append(row)
+    
+    return "\n".join(lines)
+
 
 def send_teams_digest(webhook_url: str, pending: list[dict],
                       now_iso: str, report_hours: int):
@@ -519,6 +587,17 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
             "wrap":     True,
         },
     ]
+
+    # Add timeline table if we have audit data
+    timeline = _build_timeline_table(pending)
+    if timeline:
+        body.append({
+            "type":    "TextBlock",
+            "text":    timeline,
+            "wrap":    True,
+            "spacing": "Medium",
+            "fontType": "Monospace",
+        })
 
     # RED and YELLOW domains — highlighted containers with full details
     for a in sorted(flagged, key=lambda x: 0 if x["severity"] == "RED" else 1):
@@ -583,6 +662,7 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
         "type": "message",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": None,
             "content":     content,
         }],
     }
