@@ -62,7 +62,7 @@ import random
 import re
 import sys
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -138,6 +138,9 @@ BASELINE_REFRESH_DAYS = 7
 REPORT_INTERVAL_HOURS = 24
 FETCH_TIMEOUT_SEC     = 40   # hard cap per URL across all browser operations
 
+# ── Timezone for reports (UTC+8) ──────────────────────────────────────────────
+REPORT_TIMEZONE = timezone(timedelta(hours=8))  # UTC+8
+
 # ── Hack-indicator keywords (body text scan) ──────────────────────────────────
 HACK_KEYWORDS = [
     # Defacement signatures
@@ -192,6 +195,22 @@ def save_state(state: dict):
 
 
 # ── String helpers ────────────────────────────────────────────────────────────
+
+def to_report_time(dt: datetime) -> datetime:
+    """Convert datetime to report timezone (UTC+8)."""
+    if dt.tzinfo is None:
+        # Assume UTC if naive
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(REPORT_TIMEZONE)
+
+
+def format_report_time(dt: datetime, include_date: bool = True) -> str:
+    """Format datetime in report timezone."""
+    local_dt = to_report_time(dt)
+    if include_date:
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+    return local_dt.strftime("%H:%M")
+
 
 def normalize(s: str) -> str:
     s = re.sub(r"^[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s*[—–-]\s*", "", (s or "").strip())
@@ -423,7 +442,7 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
             "type": "TextBlock",
             "text": (
                 f"A RED flag was detected during the hourly audit "
-                f"at {now_iso}. Immediate review recommended."
+                f"at {format_report_time(datetime.fromisoformat(now_iso))}. Immediate review recommended."
                 + (f"  {_mention_text(mentions)}" if mentions else "")
             ),
             "wrap": True,
@@ -482,9 +501,11 @@ def _build_timeline_table(pending: list[dict]) -> str:
     grid_data: dict[tuple[str, str], str] = {}  # (hour, domain) → severity
     
     for alert in pending:
-        ts = alert["timestamp"]
-        # Extract hour: "2026-05-19T14:30:00" → "14:00"
-        hour = ts[11:13] + ":00"
+        ts_str = alert["timestamp"]
+        # Parse and convert to report timezone (UTC+8)
+        dt = datetime.fromisoformat(ts_str)
+        local_dt = to_report_time(dt)
+        hour = local_dt.strftime("%H:00")
         domain = alert["domain"]
         severity = alert["severity"]
         
@@ -583,7 +604,7 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
         f"DF SentryBot — {len(flagged)} issue(s) across {len(worst)} domain(s)"
     )
 
-    subtitle = f"Report period: last {report_hours} hour(s) — generated {now_iso}"
+    subtitle = f"Report period: last {report_hours} hour(s) — generated {format_report_time(datetime.fromisoformat(now_iso))}"
     if mentions:
         subtitle += f"  {_mention_text(mentions)}"
 
