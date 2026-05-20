@@ -497,8 +497,10 @@ def _build_timeline_table(pending: list[dict]) -> str:
         return ""
 
     # Group alerts by (hour, domain) → keep worst severity
+    # Track actual datetime for each hour to sort chronologically
     from collections import defaultdict
     grid_data: dict[tuple[str, str], str] = {}  # (hour, domain) → severity
+    hour_timestamps: dict[str, datetime] = {}  # hour → earliest actual datetime
     
     for alert in pending:
         ts_str = alert["timestamp"]
@@ -508,6 +510,10 @@ def _build_timeline_table(pending: list[dict]) -> str:
         hour = local_dt.strftime("%H:00")
         domain = alert["domain"]
         severity = alert["severity"]
+        
+        # Track earliest timestamp for this hour (for sorting)
+        if hour not in hour_timestamps or local_dt < hour_timestamps[hour]:
+            hour_timestamps[hour] = local_dt
         
         key = (hour, domain)
         if key not in grid_data or (
@@ -519,8 +525,8 @@ def _build_timeline_table(pending: list[dict]) -> str:
     if not grid_data:
         return ""
     
-    # Get unique hours and domains, sorted
-    hours = sorted(set(h for h, _ in grid_data.keys()))
+    # Get unique hours, sorted chronologically (not alphabetically)
+    hours = sorted(hour_timestamps.keys(), key=lambda h: hour_timestamps[h])
     domains = sorted(set(d for _, d in grid_data.keys()))
     
     if not hours or not domains:
