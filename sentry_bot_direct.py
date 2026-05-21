@@ -853,7 +853,9 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
                          new_externals)
 
             # Immediate emergency alert for RED — does not wait for digest
-            if sev == "RED":
+            # Skip emergency alerts for timeouts (still included in daily digest)
+            is_timeout = "timed out" in meta.get("note", "").lower()
+            if sev == "RED" and not is_timeout:
                 send_emergency_alert(teams_webhook, domain, url,
                                      meta, content_sim, new_externals, now_iso)
 
