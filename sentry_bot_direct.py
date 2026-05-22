@@ -645,6 +645,7 @@ def send_teams_digest(webhook_url: str, pending: list[dict],
     # RED and YELLOW domains — highlighted containers with full details
     for a in sorted(flagged, key=lambda x: 0 if x["severity"] == "RED" else 1):
         facts = [
+            {"title": "Detected at",  "value": format_report_time(datetime.fromisoformat(a["timestamp"]))},
             {"title": "URL",         "value": a["url"]},
             {"title": "HTTP status", "value": str(a.get("status") or "N/A")},
         ]
