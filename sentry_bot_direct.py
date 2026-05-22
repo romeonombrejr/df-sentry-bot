@@ -420,7 +420,7 @@ def send_emergency_alert(webhook_url: str, domain: str, url: str,
     ]
     if content_sim is not None:
         facts.append({"title": "Content match",
-                      "value": f"{content_sim * 100:.1f}% vs baseline"})
+                      "value": f"{content_sim * 100:.1f}% vs snapshot"})
     if meta.get("keywords_found"):
         facts.append({"title": "Hack keywords",
                       "value": ", ".join(meta["keywords_found"])})
