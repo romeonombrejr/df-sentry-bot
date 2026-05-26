@@ -924,7 +924,7 @@ async def run(domains: list[str], headless: bool, teams_webhook: str,
     elif should_report:
         send_teams_digest(teams_webhook, pending_alerts, now_iso, report_hours)
         state["pending_alerts"] = []
-        state["last_report"]    = now_iso
+        state["last_report"]    = now.replace(minute=0, second=0, microsecond=0).isoformat()
     else:
         next_report = (
             datetime.fromisoformat(last_report) + timedelta(hours=report_hours)
